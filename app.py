@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -17,9 +18,15 @@ from src.metrics import (
     summary_stats,
     weekly_summary,
 )
+from src.race_ml import ml_race_report
 from src.race_prediction import RACES, race_report
 
 st.set_page_config(page_title="Running Dashboard", page_icon="🏃", layout="wide")
+
+
+@st.cache_data(show_spinner="Fitting Linear Regression / SVM / Random Forest (grid search + cross-validation)...")
+def _cached_ml_race_report(df, race_choice):
+    return ml_race_report(df, race_choice)
 
 df = load_activities()
 df_all = df.copy()  # unfiltered; race prediction needs full history regardless of sidebar filters
@@ -238,6 +245,61 @@ from.
                 f"You ran {abs(result['error_pct']):.1f}% slower than the model predicted from your training "
                 "efforts — could be race-day conditions, pacing, or fueling; worth a look."
             )
+
+        st.divider()
+        st.subheader("Model comparison: Linear Regression vs. SVM vs. Random Forest")
+        st.markdown(
+            """
+**Method:** every individual training run before this race becomes one training row —
+features describe the training context at that point (7-/28-day rolling volume, rolling
+hard-effort km, rolling easy-effort km, run frequency, longest recent run, running history,
+prior fitness/fatigue from intervals.icu's own model), and the target is that run's own
+time. This gives far more rows than the 3-race version above, enough for real
+cross-validation. All features are standardized (zero mean, unit variance) before fitting.
+
+**Why two error columns:** plain cross-validation MAE is measured on ordinary training
+runs, which are mostly short. It does **not** tell you how a model will extrapolate to the
+one long, rare, race-distance effort you actually care about — a model can look great on
+CV and still fail badly at the actual race. *Long-run holdout MAE* (train without the
+longest few runs, test on exactly those) is a much better proxy for that, and is what the
+recommendation below is based on.
+"""
+        )
+
+        ml_result = _cached_ml_race_report(df_all, race_choice)
+        if not ml_result.get("ok"):
+            st.warning("Not enough training runs before this race to fit ML models.")
+        else:
+            rows = []
+            for name, m in ml_result["models"].items():
+                rows.append(
+                    {
+                        "Model": name,
+                        "CV MAE (min)": round(m["cv_mae"], 1),
+                        "Long-run holdout MAE (min)": round(m["long_run_holdout_mae"], 1),
+                        "Race prediction (min)": round(m["predicted_min"], 1),
+                        "Error": f"{m['error_pct']:+.1f}%",
+                    }
+                )
+            model_df = pd.DataFrame(rows).sort_values("Long-run holdout MAE (min)")
+            best_name = model_df.iloc[0]["Model"]
+            st.dataframe(model_df, width="stretch", hide_index=True)
+            st.caption(
+                f"Actual: {ml_result['actual_min']:.1f} min. Lowest long-run-holdout error here: **{best_name}** — "
+                "that's the one I'd trust for this race, even if it isn't the lowest plain-CV-MAE model above."
+            )
+
+            st.markdown("**Feature value: how much does each factor matter?**")
+            st.caption(
+                "Standardized linear-regression coefficients, grouped and summed (absolute value) — "
+                "excludes distance itself, which trivially dominates (of course a marathon takes longer "
+                "than a 5K) and would drown out everything else."
+            )
+            coef_df = pd.DataFrame(
+                {"Factor": list(ml_result["grouped_coefficients"].keys()), "Relative weight": list(ml_result["grouped_coefficients"].values())}
+            ).sort_values("Relative weight", ascending=True)
+            fig9 = px.bar(coef_df, x="Relative weight", y="Factor", orientation="h")
+            st.plotly_chart(fig9, width="stretch")
 
 with tab_bests:
     st.subheader("Best efforts by distance")
