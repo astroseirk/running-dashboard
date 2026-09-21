@@ -1,4 +1,6 @@
-﻿import plotly.express as px
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 import plotly.io as pio
 import streamlit as st
 
@@ -15,12 +17,14 @@ from src.metrics import (
     summary_stats,
     weekly_summary,
 )
+from src.race_prediction import RACES, race_report
 
-st.set_page_config(page_title="Running Dashboard", page_icon="ðŸƒ", layout="wide")
+st.set_page_config(page_title="Running Dashboard", page_icon="🏃", layout="wide")
 
 df = load_activities()
+df_all = df.copy()  # unfiltered; race prediction needs full history regardless of sidebar filters
 
-st.title("ðŸƒ Running Dashboard")
+st.title("🏃 Running Dashboard")
 st.caption(f"{len(df)} runs loaded from intervals.icu export")
 
 # --- Sidebar filters ---
@@ -52,8 +56,8 @@ col2.metric("Total distance", f"{stats['total_distance_km']:.0f} km")
 col3.metric("Total time", f"{stats['total_time_hours']:.0f} h")
 col4.metric("Average pace", stats["avg_pace"])
 
-tab_trends, tab_zones, tab_easy, tab_bests, tab_table = st.tabs(
-    ["Trends", "HR Zones", "Easy Effort Trend", "Personal Bests", "All Runs"]
+tab_trends, tab_zones, tab_easy, tab_predict, tab_bests, tab_table = st.tabs(
+    ["Trends", "HR Zones", "Easy Effort Trend", "Race Prediction", "Personal Bests", "All Runs"]
 )
 
 with tab_trends:
@@ -74,7 +78,7 @@ with tab_trends:
             labels={"start_date_local": "Date", "value": "Score", "variable": "Metric"},
         )
         st.plotly_chart(fig2, width='stretch')
-        st.caption("Fitness/fatigue from intervals.icu's training-load model. Form = fitness âˆ’ fatigue.")
+        st.caption("Fitness/fatigue from intervals.icu's training-load model. Form = fitness − fatigue.")
 
     st.subheader("Pace over time")
     fig3 = px.scatter(
@@ -100,7 +104,7 @@ with tab_zones:
 with tab_easy:
     st.subheader("Easy-effort HR & pace trend")
     st.caption(
-        "Cohort is every run with RPE â‰¤ 3, not just runs titled â€˜Easy Runâ€™ â€” "
+        "Cohort is every run with RPE ≤ 3, not just runs titled 'Easy Run' — "
         "the name tag only exists on a small, recent subset and understates how many easy runs you've done."
     )
     monthly = easy_effort_monthly(df_dated)
@@ -122,7 +126,7 @@ with tab_easy:
             labels={"start_date_local": "Month", "efficiency": "Efficiency (km/h per bpm)"},
         )
         st.plotly_chart(fig7, width='stretch')
-        st.caption("Efficiency = speed Ã· average HR. Rising over time means more speed for the same effort â€” an aerobic-fitness signal on easy days specifically.")
+        st.caption("Efficiency = speed ÷ average HR. Rising over time means more speed for the same effort — an aerobic-fitness signal on easy days specifically.")
 
         split = easy_effort_half_split(df_dated)
         if split:
@@ -131,6 +135,105 @@ with tab_easy:
             c1.metric("Avg HR", f"{split['second']['avg_hr']:.0f} bpm", f"{split['second']['avg_hr'] - split['first']['avg_hr']:+.1f} bpm")
             c2.metric("Avg pace", format_pace(split["second"]["avg_pace"]), f"{split['second']['avg_pace'] - split['first']['avg_pace']:+.2f} min/km")
             c3.metric("Efficiency", f"{split['second']['efficiency']:.4f}", f"{split['second']['efficiency'] - split['first']['efficiency']:+.4f}")
+
+with tab_predict:
+    st.subheader("Race time prediction")
+    st.caption(
+        "For the selected race, every training run strictly BEFORE that race date is used to fit a "
+        "prediction — the race's own result is never part of the fit."
+    )
+    race_choice = st.selectbox("Race", list(RACES.keys()))
+    result = race_report(df_all, race_choice)
+
+    if not result.get("found"):
+        st.warning("Could not find this race in the data.")
+    elif not result["fit_ok"]:
+        st.warning("Not enough hard-effort training runs before this race to fit a prediction.")
+    else:
+        st.markdown(
+            f"""
+**Method:** Riegel's power law, the standard race-time-scaling formula from exercise
+science: `time = a × distance^b`. `a` and `b` are fit (log-log linear regression) using
+every **hard-effort** run before {result['race_date']} — anything tagged Tempo, Intervals,
+or Race, or self-rated RPE ≥ 6. Easy/recovery runs are excluded because they don't represent
+a maximal sustainable pace for their duration, which is what the formula needs to extrapolate
+from.
+"""
+        )
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Training runs before race", result["n_training_runs"])
+        c2.metric("Hard-effort points used in fit", len(result["hard_effort_points"]))
+        c3.metric("Fitted exponent (b)", f"{result['b']:.3f}")
+        c4.metric(
+            "Fit duration range",
+            f"{result['min_duration_min']:.0f}–{result['max_duration_min']:.0f} min",
+        )
+
+        pred_min = result["predicted_seconds"] / 60
+        actual_min = result["actual_seconds"] / 60
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Predicted", f"{format_pace(pred_min / result['distance_km'])}", f"{pred_min:.1f} min total")
+        d2.metric("Actual", f"{format_pace(actual_min / result['distance_km'])}", f"{actual_min:.1f} min total")
+        d3.metric(
+            "Prediction error",
+            f"{result['error_seconds']/60:+.1f} min",
+            f"{result['error_pct']:+.1f}%",
+            delta_color="inverse",
+        )
+
+        # Fit curve + points, on a log-log duration-vs-distance plot
+        hard = result["hard_effort_points"]
+        fig8 = go.Figure()
+        fig8.add_trace(
+            go.Scatter(
+                x=hard["distance"] / 1000,
+                y=hard["moving_time"] / 60,
+                mode="markers",
+                name="Hard-effort training runs (used in fit)",
+                text=hard["name"],
+                marker=dict(size=8),
+            )
+        )
+        x_curve = np.linspace(hard["distance"].min(), max(hard["distance"].max(), result["distance_km"] * 1000), 200)
+        y_curve = result["a"] * x_curve**result["b"] / 60
+        fig8.add_trace(go.Scatter(x=x_curve / 1000, y=y_curve, mode="lines", name="Fitted curve (extrapolated)"))
+        fig8.add_trace(
+            go.Scatter(
+                x=[result["distance_km"]],
+                y=[pred_min],
+                mode="markers",
+                name="Predicted",
+                marker=dict(size=14, symbol="diamond"),
+            )
+        )
+        fig8.add_trace(
+            go.Scatter(
+                x=[result["distance_km"]],
+                y=[actual_min],
+                mode="markers",
+                name="Actual",
+                marker=dict(size=14, symbol="star"),
+            )
+        )
+        fig8.update_layout(
+            xaxis_title="Distance (km)",
+            yaxis_title="Duration (min)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        )
+        st.plotly_chart(fig8, width='stretch')
+
+        if result["error_pct"] > 0:
+            st.caption(
+                f"You ran {abs(result['error_pct']):.1f}% faster than the model predicted from your training "
+                "efforts alone — a real, positive signal (race-day execution, taper, or conservative training "
+                "paces), not a modeling flaw."
+            )
+        else:
+            st.caption(
+                f"You ran {abs(result['error_pct']):.1f}% slower than the model predicted from your training "
+                "efforts — could be race-day conditions, pacing, or fueling; worth a look."
+            )
 
 with tab_bests:
     st.subheader("Best efforts by distance")
