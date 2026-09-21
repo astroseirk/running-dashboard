@@ -71,6 +71,64 @@ def personal_bests(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+EASY_EFFORT_RPE_MAX = 3
+
+
+def easy_effort_runs(df: pd.DataFrame) -> pd.DataFrame:
+    """Runs at RPE <= 3, regardless of title. More representative of true easy
+    effort than the name-based 'Easy Run' tag, which only exists on a
+    minority of runs that happened to be titled that way.
+    """
+    if "icu_rpe" not in df.columns:
+        return df.iloc[0:0]
+    cohort = df[df["icu_rpe"] <= EASY_EFFORT_RPE_MAX].dropna(subset=["average_heartrate", "pace_min_per_km"]).copy()
+    cohort["speed_kmh"] = 60 / cohort["pace_min_per_km"]
+    cohort["efficiency"] = cohort["speed_kmh"] / cohort["average_heartrate"]
+    return cohort
+
+
+def easy_effort_monthly(df: pd.DataFrame) -> pd.DataFrame:
+    cohort = easy_effort_runs(df)
+    if cohort.empty:
+        return cohort
+    monthly = (
+        cohort.groupby(cohort["start_date_local"].dt.to_period("M"))
+        .agg(
+            avg_hr=("average_heartrate", "mean"),
+            avg_pace=("pace_min_per_km", "mean"),
+            efficiency=("efficiency", "mean"),
+            runs=("id", "count"),
+        )
+        .reset_index()
+    )
+    monthly["start_date_local"] = monthly["start_date_local"].dt.to_timestamp()
+    return monthly
+
+
+def easy_effort_half_split(df: pd.DataFrame) -> dict | None:
+    cohort = easy_effort_runs(df)
+    if len(cohort) < 4:
+        return None
+    cohort = cohort.sort_values("start_date_local")
+    mid = cohort["start_date_local"].median()
+    first = cohort[cohort["start_date_local"] <= mid]
+    second = cohort[cohort["start_date_local"] > mid]
+    return {
+        "first": {
+            "n": len(first),
+            "avg_hr": first["average_heartrate"].mean(),
+            "avg_pace": first["pace_min_per_km"].mean(),
+            "efficiency": first["efficiency"].mean(),
+        },
+        "second": {
+            "n": len(second),
+            "avg_hr": second["average_heartrate"].mean(),
+            "avg_pace": second["pace_min_per_km"].mean(),
+            "efficiency": second["efficiency"].mean(),
+        },
+    }
+
+
 def summary_stats(df: pd.DataFrame) -> dict:
     return {
         "total_runs": len(df),
