@@ -25,6 +25,10 @@ df = load_activities()
 df_all = df.copy()  # unfiltered; race prediction needs full history regardless of sidebar filters
 
 st.title("🏃 Running Dashboard")
+st.markdown(
+    "A personal project analyzing **my own running data** — every run here is real, tracked via "
+    "Garmin and synced to [intervals.icu](https://intervals.icu) since January 2024."
+)
 st.caption(f"{len(df)} runs loaded from intervals.icu export")
 
 # --- Sidebar filters ---

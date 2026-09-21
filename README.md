@@ -5,6 +5,15 @@
 An interactive Streamlit dashboard analyzing my running data exported from
 [intervals.icu](https://intervals.icu).
 
+## About
+
+This is a personal side project built on **my own running data** — every activity here is a real
+run I did, tracked via Garmin and synced to intervals.icu, going back to January 2024. I built this
+to dig into my own training patterns (pace, heart rate, training load) beyond what a stock app
+shows, and to try something more ambitious: predicting my race times from training data alone, and
+checking those predictions against races I've actually run. It's a Python/Streamlit project, not
+affiliated with any employer.
+
 ## What's in it
 
 - **Trends** — weekly distance, fitness/fatigue/form (intervals.icu's training-load model), pace over time
