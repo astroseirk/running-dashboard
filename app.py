@@ -1,5 +1,8 @@
 import plotly.express as px
+import plotly.io as pio
 import streamlit as st
+
+pio.templates.default = "plotly_dark"
 
 from src.data import load_activities
 from src.metrics import (
