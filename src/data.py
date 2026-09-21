@@ -50,6 +50,10 @@ def load_activities(path: Path = DATA_PATH) -> pd.DataFrame:
     df["start_date_local"] = pd.to_datetime(df["start_date_local"], errors="coerce")
     df = df.dropna(subset=["start_date_local", "distance", "moving_time"])
 
+    # Below ~1km, GPS/pause glitches (near-zero distance with real elapsed time,
+    # producing absurd paces) are indistinguishable from genuine short runs, so drop them.
+    df = df[df["distance"] >= 1000].copy()
+
     df["distance_km"] = df["distance"] / 1000
     df["moving_time_min"] = df["moving_time"] / 60
     df["pace_min_per_km"] = df["moving_time_min"] / df["distance_km"].replace(0, pd.NA)
