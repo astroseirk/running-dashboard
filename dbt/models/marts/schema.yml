@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: mart_weekly_summary
+    description: Weekly running volume, count, training load, average pace.
+    columns:
+      - name: week
+        tests:
+          - not_null
+          - unique
+
+  - name: mart_easy_effort_monthly
+    description: Monthly HR/pace/efficiency trend on the RPE<=3 easy-effort cohort.
+    columns:
+      - name: month
+        tests:
+          - not_null
+          - unique
+
+  - name: mart_personal_bests
+    description: Best pace at 5K/10K/Half Marathon/Marathon distances.
+    columns:
+      - name: distance
+        tests:
+          - not_null
+          - unique
+          - accepted_values:
+              arguments:
+                values: ["5K", "10K", "Half Marathon", "Marathon"]
+
+  - name: mart_hr_zone_totals
+    description: Monthly hours spent in each heart-rate zone.
+    columns:
+      - name: month
+        tests:
+          - not_null
+          - unique

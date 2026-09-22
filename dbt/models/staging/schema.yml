@@ -1,0 +1,25 @@
+version: 2
+
+sources: []
+
+models:
+  - name: stg_activities
+    description: Cleaned running activities -- one row per run, type filtered, glitches dropped.
+    columns:
+      - name: id
+        description: intervals.icu activity id
+        tests:
+          - unique
+          - not_null
+      - name: start_date_local
+        tests:
+          - not_null
+      - name: distance_km
+        tests:
+          - not_null
+      - name: workout_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Race", "Intervals", "Tempo", "Long Run", "Easy Run", "Other"]

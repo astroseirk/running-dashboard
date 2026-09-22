@@ -1,0 +1,22 @@
+name: "running_dashboard"
+version: "1.0.0"
+config-version: 2
+
+profile: "running_dashboard"
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+seeds:
+  running_dashboard:
+    +quote_columns: false
+
+models:
+  running_dashboard:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

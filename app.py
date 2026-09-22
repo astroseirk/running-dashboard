@@ -7,17 +7,9 @@ import streamlit as st
 
 pio.templates.default = "plotly_dark"
 
+from src import warehouse as wh
 from src.data import load_activities
-from src.metrics import (
-    easy_effort_half_split,
-    easy_effort_monthly,
-    fitness_fatigue_trend,
-    format_pace,
-    hr_zone_totals,
-    personal_bests,
-    summary_stats,
-    weekly_summary,
-)
+from src.metrics import format_pace
 from src.race_ml import ml_race_report
 from src.race_prediction import RACES, race_report
 
@@ -28,44 +20,46 @@ st.set_page_config(page_title="Running Dashboard", page_icon="🏃", layout="wid
 def _cached_ml_race_report(df, race_choice):
     return ml_race_report(df, race_choice)
 
-df = load_activities()
-df_all = df.copy()  # unfiltered; race prediction needs full history regardless of sidebar filters
+
+# Race prediction needs the full unfiltered history as a pandas DataFrame for its
+# per-run rolling-window feature engineering, regardless of the sidebar filters below.
+df_all = load_activities()
 
 st.title("🏃 Running Dashboard")
 st.markdown(
     "A personal project analyzing **my own running data** — every run here is real, tracked via "
     "Garmin and synced to [intervals.icu](https://intervals.icu) since January 2024."
 )
-st.caption(f"{len(df)} runs loaded from intervals.icu export")
+st.caption(
+    f"{len(df_all)} runs loaded — most tabs query a dbt-built DuckDB warehouse "
+    "(`dbt/models/`); Race Prediction uses pandas/scikit-learn directly on the raw export."
+)
 
 # --- Sidebar filters ---
 st.sidebar.header("Filters")
-min_date, max_date = df["start_date_local"].min().date(), df["start_date_local"].max().date()
+min_date, max_date = wh.date_bounds()
 date_range = st.sidebar.date_input("Date range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
-workout_types = st.sidebar.multiselect(
-    "Workout type", options=sorted(df["workout_type"].unique()), default=sorted(df["workout_type"].unique())
-)
+all_workout_types = wh.distinct_workout_types()
+workout_types = st.sidebar.multiselect("Workout type", options=all_workout_types, default=all_workout_types)
 
-if len(date_range) == 2:
-    start, end = date_range
-    df = df[(df["start_date_local"].dt.date >= start) & (df["start_date_local"].dt.date <= end)]
+start, end = date_range if len(date_range) == 2 else (min_date, max_date)
 
-# Keep a date-filtered-only copy (before the workout-type filter) for the easy-effort
-# cohort, which is defined by RPE rather than by the same name-based type filter.
-df_dated = df.copy()
-df = df[df["workout_type"].isin(workout_types)]
+if not workout_types:
+    st.warning("No runs match the current filters.")
+    st.stop()
 
-if df.empty:
+filtered = wh.get_filtered_activities(start, end, workout_types)
+if filtered.empty:
     st.warning("No runs match the current filters.")
     st.stop()
 
 # --- Overview ---
-stats = summary_stats(df)
+stats = wh.summary_stats(start, end, workout_types)
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total runs", stats["total_runs"])
 col2.metric("Total distance", f"{stats['total_distance_km']:.0f} km")
 col3.metric("Total time", f"{stats['total_time_hours']:.0f} h")
-col4.metric("Average pace", stats["avg_pace"])
+col4.metric("Average pace", format_pace(stats["avg_pace_min_per_km"]))
 
 tab_trends, tab_zones, tab_easy, tab_predict, tab_bests, tab_table = st.tabs(
     ["Trends", "HR Zones", "Easy Effort Trend", "Race Prediction", "Personal Bests", "All Runs"]
@@ -73,15 +67,17 @@ tab_trends, tab_zones, tab_easy, tab_predict, tab_bests, tab_table = st.tabs(
 
 with tab_trends:
     st.subheader("Weekly distance")
-    weekly = weekly_summary(df)
+    weekly = wh.weekly_summary(start, end, workout_types)
     fig = px.bar(weekly, x="week", y="distance_km", labels={"week": "Week", "distance_km": "Distance (km)"})
     st.plotly_chart(fig, width='stretch')
 
     st.subheader("Fitness, fatigue & form")
-    trend = fitness_fatigue_trend(df)
+    trend = filtered[["start_date_local", "icu_fitness", "icu_fatigue"]].dropna()
     if trend.empty:
         st.info("No fitness/fatigue data in the selected range.")
     else:
+        trend = trend.copy()
+        trend["form"] = trend["icu_fitness"] - trend["icu_fatigue"]
         fig2 = px.line(
             trend,
             x="start_date_local",
@@ -93,7 +89,7 @@ with tab_trends:
 
     st.subheader("Pace over time")
     fig3 = px.scatter(
-        df,
+        filtered,
         x="start_date_local",
         y="pace_min_per_km",
         color="workout_type",
@@ -104,7 +100,7 @@ with tab_trends:
 
 with tab_zones:
     st.subheader("Time in heart-rate zone by month")
-    zones = hr_zone_totals(df, by="month")
+    zones = wh.hr_zone_totals(start, end, workout_types)
     zone_cols = [c for c in zones.columns if c.startswith("Zone")]
     if zone_cols:
         fig4 = px.bar(zones, x="month", y=zone_cols, labels={"month": "Month", "value": "Hours"})
@@ -118,7 +114,7 @@ with tab_easy:
         "Cohort is every run with RPE ≤ 3, not just runs titled 'Easy Run' — "
         "the name tag only exists on a small, recent subset and understates how many easy runs you've done."
     )
-    monthly = easy_effort_monthly(df_dated)
+    monthly = wh.easy_effort_monthly(start, end)
     if monthly.empty:
         st.info("No runs with both an RPE rating and heart-rate data in this date range.")
     else:
@@ -139,7 +135,7 @@ with tab_easy:
         st.plotly_chart(fig7, width='stretch')
         st.caption("Efficiency = speed ÷ average HR. Rising over time means more speed for the same effort — an aerobic-fitness signal on easy days specifically.")
 
-        split = easy_effort_half_split(df_dated)
+        split = wh.easy_effort_half_split(start, end)
         if split:
             st.markdown("**First half vs. second half of this date range**")
             c1, c2, c3 = st.columns(3)
@@ -303,7 +299,7 @@ recommendation below is based on.
 
 with tab_bests:
     st.subheader("Best efforts by distance")
-    bests = personal_bests(df)
+    bests = wh.personal_bests(start, end, workout_types)
     if bests.empty:
         st.info("No runs matched the standard race distances (5K / 10K / half marathon) yet.")
     else:
@@ -311,7 +307,7 @@ with tab_bests:
 
 with tab_table:
     st.subheader("All runs")
-    display = df[
+    display = filtered[
         ["start_date_local", "name", "workout_type", "distance_km", "moving_time_min", "pace_min_per_km", "average_heartrate"]
     ].copy()
     display["pace"] = display["pace_min_per_km"].apply(format_pace)

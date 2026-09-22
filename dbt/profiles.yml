@@ -1,0 +1,7 @@
+running_dashboard:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: running.duckdb
+      threads: 4
